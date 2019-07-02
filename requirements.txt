@@ -4,4 +4,4 @@ scipy
 pyparsing
 astropy>=3.0
 matplotlib>=2.0
-git+git://github.com/dr-guangtou/unagi
+#git+git://github.com/dr-guangtou/unagi

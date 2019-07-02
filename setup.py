@@ -4,7 +4,7 @@
 Stolen from http://python-packaging.readthedocs.io/en/latest/everything.html and
 modified by me.
 '''
-__version__ = '0.1.0'
+__version__ = '0.0.0'
 
 from setuptools import setup, find_packages
 
@@ -42,8 +42,8 @@ setup(
     ],
     keywords='astronomy',
     url='https://github.com/dr-guangtou/lvhuo',
-    author='Song Huang',
-    author_email='shuang89@ucsc.edu',
+    author='Jiaxuan Li, Song Huang',
+    author_email='jiaxuan_li@pku.edu.cn, shuang89@ucsc.edu',
     license='MIT',
     packages=find_packages(),
     install_requires=INSTALL_REQUIRES,
