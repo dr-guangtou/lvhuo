@@ -102,6 +102,62 @@ def circularize(img, n=14, print_g=True):
                 str(abs(np.sum(b - img))))
     return b
 
+# Cutout image
+def img_cutout(img, wcs, coord_1, coord_2, size=60.0, pix=0.168,
+               prefix='img_cutout', pixel_unit=False, img_header=None, 
+               out_dir=None, save=True):
+    """(From kungpao) Generate image cutout with updated WCS information.
+    ----------
+    Parameters:
+        pixel_unit: boolen, optional
+                    When True, coord_1, cooord_2 becomes X, Y pixel coordinates.
+                    Size will also be treated as in pixels.
+        img: 2d array.
+        wcs: astropy wcs object of the input image.
+        coord_1: ra of the center.
+        coord_2: dec of the center.
+        size: image size, default in arcsec unit.
+        pix: pixel size.
+        img_header: the astropy header object of the input image. 
+                    In case you can save the infomation in this header to the new header.
+    """
+    from astropy.nddata import Cutout2D
+    if not pixel_unit:
+        # imgsize in unit of arcsec
+        cutout_size = np.asarray(size) / pix
+        cen_x, cen_y = wcs.wcs_world2pix(coord_1, coord_2, 0)
+    else:
+        cutout_size = np.asarray(size)
+        cen_x, cen_y = coord_1, coord_2
+
+    cen_pos = (int(cen_x), int(cen_y))
+    dx = -1.0 * (cen_x - int(cen_x))
+    dy = -1.0 * (cen_y - int(cen_y))
+
+    # Generate cutout
+    cutout = Cutout2D(img, cen_pos, cutout_size, wcs=wcs)
+
+    # Update the header
+    cutout_header = cutout.wcs.to_header()
+    if img_header is not None:
+        intersect = [k for k in img_header if k not in cutout_header]
+        for keyword in intersect:
+            cutout_header.set(keyword, img_header[keyword], img_header.comments[keyword])
+    
+    # Build a HDU
+    hdu = fits.PrimaryHDU(header=cutout_header)
+    hdu.data = cutout.data
+
+    # Save FITS image
+    if save:
+        fits_file = prefix + '.fits'
+        if out_dir is not None:
+            fits_file = os.path.join(out_dir, fits_file)
+
+        hdu.writeto(fits_file, overwrite=True)
+
+    return cutout, [cen_pos, dx, dy]
+
 # evaluate_sky objects for a given image
 def extract_obj(img, b=30, f=5, sigma=5, pixel_scale=0.168, minarea=5, 
     deblend_nthresh=32, deblend_cont=0.005, clean_param=1.0, 
