@@ -106,10 +106,12 @@ class Stack():
         Returns:
             rotate_image: ndarray.
         '''
-        from scipy.ndimage.interpolation import rotate as rt
         angle = angle % 360
-        result = rt(self.image, angle, order=order, mode='constant', 
-                    cval=cval, reshape=reshape)
+        #from scipy.ndimage.interpolation import rotate as rt
+        #result = rt(self.image, angle, order=order, mode='constant', 
+        #            cval=cval, reshape=reshape)   
+        from scipy.misc import imrotate
+        result = imrotate(self.image, angle, interp='bicubic')
         self._image = result
         return result
     def rotate_mask(self, angle, order=3, reshape=False, cval=0.0):
