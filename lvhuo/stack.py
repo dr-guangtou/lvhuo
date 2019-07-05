@@ -92,13 +92,14 @@ class Stack():
         img_hdu.writeto(fits_file_name, output_verify='warn', overwrite=overwrite)
 
     # Rotate image/mask
-    # TODO: use `lanczos` interpolation instead of spline.
-    def rotate_image(self, angle, order=3, reshape=False, cval=0.0):
+    def rotate_image(self, angle, method='lanczos', order=5, reshape=False, cval=0.0):
         '''Rotate the image of Stack object.
 
         Parameters:
-            angle (float): rotation angle in degress, clockwise.
-            order (int): the order of spline interpolation, can be in the range 0-5.
+            angle (float): rotation angle in degress, counterclockwise.
+            method (str): interpolation method. Use 'lanczos', 'spline', 'cubic', 
+                'bicubic', 'nearest' or 'bilinear'.
+            order (int): the order of spline interpolation (within 0-5) or Lanczos interpolation (>0).
             reshape (bool): if True, the output shape is adapted so that the rorated image 
                 is contained completely in the output array.
             cval (scalar): value to fill the edges. Default is NaN.
@@ -107,19 +108,52 @@ class Stack():
             rotate_image: ndarray.
         '''
         angle = angle % 360
-        #from scipy.ndimage.interpolation import rotate as rt
-        #result = rt(self.image, angle, order=order, mode='constant', 
-        #            cval=cval, reshape=reshape)   
-        from scipy.misc import imrotate
-        result = imrotate(self.image, angle, interp='bicubic')
-        self._image = result
-        return result
-    def rotate_mask(self, angle, order=3, reshape=False, cval=0.0):
+
+        if method == 'lanczos':
+            try:
+                from galsim import degrees, Angle
+                from galsim.interpolant import Lanczos
+                from galsim import Image, InterpolatedImage
+                from galsim.fitswcs import AstropyWCS
+            except:
+                raise ImportError('# Import `galsim` failed! Please check if `galsim` is installed!')
+            # Begin rotation
+            assert (order > 0) and isinstance(order, int), 'order of ' + method + ' must be positive interger.'
+            galimg = InterpolatedImage(Image(self.image, dtype=float), 
+                                       scale=0.168, x_interpolant=Lanczos(order))
+            galimg = galimg.rotate(Angle(angle, unit=degrees))
+            ny, nx = self.image.shape
+            result = galimg.drawImage(scale=0.168, nx=nx, ny=ny)#, wcs=AstropyWCS(self.wcs))
+            self._image = result.array
+            return result.array
+
+        elif method == 'spline':
+            from scipy.ndimage.interpolation import rotate as rt
+            assert 0 < order <= 5 and isinstance(order, int), 'order of ' + method + ' must be within 0-5.'
+            result = rt(self.image, angle, order=order, mode='constant', 
+                        cval=cval, reshape=reshape)
+            self._image = result
+            return result
+        elif method in ['bicubic', 'nearest','cubic','bilinear']:
+            try:
+                from scipy.misc import imrotate
+            except:
+                raise ImportError('# Import `scipy.misc.imrotate` failed! This function may no longer be included in scipy!')
+            result = imrotate(self.image, angle, interp=method)
+            self._image = result
+            return result
+        else:
+            raise ValueError("# Not supported interpolation method. Use 'lanczos', 'spline', 'cubic', \
+                             'bicubic', 'nearest', 'bilinear'.")
+
+    def rotate_mask(self, angle, method='lanczos', order=5, reshape=False, cval=0.0):
         '''Rotate the mask of Stack object.
 
         Parameters:
-            angle (float): rotation angle in degress, clockwise.
-            order (int): the order of spline interpolation, can be in the range 0-5.
+            angle (float): rotation angle in degress, counterclockwise.
+            method (str): interpolation method. Use 'lanczos', 'spline', 'cubic', 
+                'bicubic', 'nearest' or 'bilinear'.
+            order (int): the order of spline interpolation (within 0-5) or Lanczos interpolation (>0).
             reshape (bool): if True, the output shape is adapted so that the rorated image 
                 is contained completely in the output array.
             cval (scalar): value to fill the edges. Default is NaN.
@@ -127,31 +161,172 @@ class Stack():
         Returns:
             rotate_image: ndarray.
         '''
+        angle = angle % 360
+
         if not hasattr(self, 'mask'):
             raise AttributeError("This `Stack` object doesn't have `mask`!")
-        else:
-            from scipy.ndimage.interpolation import rotate as rt
-            angle = angle % 360
-            result = rt(self.mask, angle, order=order, mode='constant', 
-                        cval=cval, reshape=reshape)
-            self._mask = (result > 0).astype(float)
-            return result
-    def rotate_Stack(self, angle, order=3, reshape=False, cval=0.0):
+        else: 
+            if method == 'lanczos':
+                try:
+                    from galsim import degrees, Angle
+                    from galsim.interpolant import Lanczos
+                    from galsim import Image, InterpolatedImage
+                    from galsim.fitswcs import AstropyWCS
+                except:
+                    raise ImportError('# Import `galsim` failed! Please check if `galsim` is installed!')
+                # Begin rotation
+                assert (order > 0) and isinstance(order, int), 'order of ' + method + ' must be positive interger.'
+                galimg = InterpolatedImage(Image(self.mask, dtype=float), 
+                                        scale=0.168, x_interpolant=Lanczos(order))
+                galimg = galimg.rotate(Angle(angle, unit=degrees))
+                ny, nx = self.image.shape
+                result = galimg.drawImage(scale=0.168, nx=nx, ny=ny) #, wcs=AstropyWCS(self.wcs))
+                self._mask = (result.array > 0.5).astype(float)
+                return result.array
+
+            elif method == 'spline':
+                from scipy.ndimage.interpolation import rotate as rt
+                assert 0 < order <= 5 and isinstance(order, int), 'order of ' + method + ' must be within 0-5.'
+                result = rt(self.mask, -angle, order=order, mode='constant', 
+                            cval=cval, reshape=reshape)
+                self._mask = (result > 0.5).astype(float)
+                return result
+            elif method in ['bicubic', 'nearest','cubic','bilinear']:
+                try:
+                    from scipy.misc import imrotate
+                except:
+                    raise ImportError('# Import `scipy.misc.imrotate` failed! This function may no longer be included in scipy!')
+                result = imrotate(self.mask, -angle, interp=method)
+                self._mask = (result > 0.5).astype(float)
+                return result
+            else:
+                raise ValueError("# Not supported interpolation method. Use 'lanczos', 'spline', 'cubic', \
+                                'bicubic', 'nearest', 'bilinear'.")
+
+    def rotate_Stack(self, angle, method='lanczos', order=5, reshape=False, cval=0.0):
         '''Rotate the Stack object.
 
         Parameters:
-            angle (float): rotation angle in degress, clockwise.
+            angle (float): rotation angle in degress, counterclockwise.
             order (int): the order of spline interpolation, can be in the range 0-5.
             reshape (bool): if True, the output shape is adapted so that the rorated image 
                 is contained completely in the output array.
             cval (scalar): value to fill the edges. Default is NaN.
         
         Returns:
-            rotate_image: ndarray.
         '''
-        self.rotate_image(angle, order, reshape, cval)
+        self.rotate_image(angle, method=method, order=order, reshape=reshape, cval=cval)
         if hasattr(self, 'mask'):
-            self.rotate_mask(angle, order, reshape, cval)
+            self.rotate_mask(angle, method=method, order=order, reshape=reshape, cval=cval)
+
+    # Shift image/mask
+    def shift_image(self, dx, dy, method='lanczos', order=5, cval=0.0):
+        '''Shift the image of Stack object.
+
+        Parameters:
+            dx, dy (float): shift distance (in pixel) along x (horizontal) and y (vertical). 
+                Note that elements in one row has the same y but different x. 
+                Example: dx = 2 is to shift the image "RIGHT", dy = 3 is to shift the image "UP".
+            method (str): interpolation method. Use 'lanczos' or 'spline'.
+            order (int): the order of spline interpolation (within 0-5) or Lanczos interpolation (>0).
+            cval (scalar): value to fill the edges. Default is NaN.
+
+        Returns:
+            shift_image: ndarray.
+        '''
+        ny, nx = self.image.shape
+        if abs(dx) > nx or abs(ny) > ny:
+            raise ValueError('# Shift distance is beyond the image size.')
+        if method == 'lanczos':
+            try: # try to import galsim
+                from galsim import degrees, Angle
+                from galsim.interpolant import Lanczos
+                from galsim import Image, InterpolatedImage
+                from galsim.fitswcs import AstropyWCS
+            except:
+                raise ImportError('# Import `galsim` failed! Please check if `galsim` is installed!')
+            # Begin rotation
+            assert (order > 0) and isinstance(order, int), 'order of ' + method + ' must be positive interger.'
+            galimg = InterpolatedImage(Image(self.image, dtype=float), 
+                                    scale=0.168, x_interpolant=Lanczos(order))
+            galimg = galimg.shift(dx=dx * 0.168, dy=dy * 0.168)
+            result = galimg.drawImage(scale=0.168, nx=nx, ny=ny)#, wcs=AstropyWCS(self.wcs))
+            self._image = result.array
+            return result.array
+        elif method == 'spline':
+            from scipy.ndimage.interpolation import shift
+            assert 0 < order <= 5 and isinstance(order, int), 'order of ' + method + ' must be within 0-5.'
+            result = shift(self.image, [dy, dx], order=order, mode='constant', cval=cval)
+            self._image = result
+            return result
+        else:
+            raise ValueError("# Not supported interpolation method. Use 'lanczos' or 'spline'.")
+
+    def shift_mask(self, dx, dy, method='lanczos', order=5, cval=0.0):
+        '''Shift the mask of Stack object.
+
+        Parameters:
+            dx, dy (float): shift distance (in pixel) along x (horizontal) and y (vertical). 
+                Note that elements in one row has the same y but different x. 
+                Example: dx = 2 is to shift the image "RIGHT", dy = 3 is to shift the image "UP".
+            method (str): interpolation method. Use 'lanczos' or 'spline'.
+            order (int): the order of spline interpolation (within 0-5) or Lanczos interpolation (>0).
+            cval (scalar): value to fill the edges. Default is NaN.
+
+        Returns:
+            shift_mask: ndarray.
+        '''
+        if not hasattr(self, 'mask'):
+            raise AttributeError("This `Stack` object doesn't have `mask`!")
+        ny, nx = self.image.shape
+        if abs(dx) > nx or abs(ny) > ny:
+            raise ValueError('# Shift distance is beyond the image size.')
+            
+        if method == 'lanczos':
+            try: # try to import galsim
+                from galsim import degrees, Angle
+                from galsim.interpolant import Lanczos
+                from galsim import Image, InterpolatedImage
+                from galsim.fitswcs import AstropyWCS
+            except:
+                raise ImportError('# Import `galsim` failed! Please check if `galsim` is installed!')
+            # Begin rotation
+            assert (order > 0) and isinstance(order, int), 'order of ' + method + ' must be positive interger.'
+            galimg = InterpolatedImage(Image(self.mask, dtype=float), 
+                                    scale=0.168, x_interpolant=Lanczos(order))
+            galimg = galimg.shift(dx=dx * 0.168, dy=dy * 0.168)
+            result = galimg.drawImage(scale=0.168, nx=nx, ny=ny)#, wcs=AstropyWCS(self.wcs))
+            self._mask = (result.array > 0.5).astype(float)
+            return result.array
+        elif method == 'spline':
+            from scipy.ndimage.interpolation import shift
+            assert 0 < order <= 5 and isinstance(order, int), 'order of ' + method + ' must be within 0-5.'
+            result = shift(self.mask, [dy, dx], order=order, mode='constant', cval=cval)
+            self._mask = (result > 0.5).astype(float)
+            return result
+        else:
+            raise ValueError("# Not supported interpolation method. Use 'lanczos' or 'spline'.")
+
+    def shift_Stack(self, dx, dy, method='lanczos', order=5, cval=0.0):
+        '''Shift the Stack object.
+
+        Parameters:
+            dx, dy (float): shift distance (in pixel) along x (horizontal) and y (vertical). 
+                Note that elements in one row has the same y but different x. 
+                Example: dx = 2 is to shift the image "RIGHT", dy = 3 is to shift the image "UP".
+            method (str): interpolation method. Use 'lanczos' or 'spline'.
+            order (int): the order of spline interpolation (within 0-5) or Lanczos interpolation (>0).
+            cval (scalar): value to fill the edges. Default is NaN.
+        
+        Returns:
+        '''
+        self.shift_image(dx, dy, method=method, order=order, cval=cval)
+        if hasattr(self, 'mask'):
+            self.shift_mask(dx, dy, method=method, order=order, cval=cval)
+    
+    # Magnify image/mask
+    
+
     # Display image/mask
     def display_image(self):
         display_single(self.image)
@@ -162,27 +337,7 @@ class Stack():
             display_single(self.image * (~self.mask.astype(bool)))
         else:
             self.display_image()
-    # Shift image/mask
-    def shift_image(self, dx, dy, order=3, cval=0.0):
-        from scipy.ndimage.interpolation import shift
-        result = shift(self.image, (dy, dx), order=order, 
-                        mode='constant', cval=cval)
-        self._image = result
-        return result
-    def shift_mask(self, dx, dy, order=3, cval=0.0):
-        if not hasattr(self, 'mask'):
-            raise AttributeError("This `Stack` object doesn't have `mask`!")
-        else:
-            from scipy.ndimage.interpolation import shift
-            result = shift(self.mask, (dy, dx), order=order, 
-                            mode='constant', cval=cval)
-            self._mask = result
-            return result
-    def shift_Stack(self, dx, dy, order=3, cval=0.0):
-        self.shift_image(dx, dy, order=order, cval=cval)
-        if hasattr(self, 'mask'):
-            self.shift_mask(dx, dy, order=order, cval=cval)
-        
+       
 
 class StackSky(Stack):
     def __init__(self, img, header, skyobj, mask=None, aper_name='aper57'):

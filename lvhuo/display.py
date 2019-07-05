@@ -419,8 +419,12 @@ def _display_single(img,
         return fig, zmin, zmax
     return ax1, zmin, zmax
 
-def display_multiple(data_array, text=None, **kwargs):
-    fig, axes = plt.subplots(1, len(data_array), figsize=(len(data_array) * 4, 8))
+def display_multiple(data_array, text=None, ax=None, **kwargs):
+    if ax is None:
+        fig, axes = plt.subplots(1, len(data_array), figsize=(len(data_array) * 4, 8))
+    else:
+        axes = ax
+
     if text is None:
         _, zmin, zmax = _display_single(data_array[0], ax=axes[0], **kwargs)
     else:
@@ -432,7 +436,10 @@ def display_multiple(data_array, text=None, **kwargs):
             _display_single(data_array[i], add_text=text[i], ax=axes[i], scale_manual=[zmin, zmax], **kwargs)
 
     plt.subplots_adjust(wspace=0.0)
-    return fig
+    if ax is None:
+        return fig
+    else:
+        return axes
 
 
 def draw_circles(img, catalog, colnames=['x', 'y'], header=None, ax=None, circle_size=30, 
