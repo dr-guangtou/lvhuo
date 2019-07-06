@@ -29,6 +29,6 @@ If you would like to request a new feature, do the same thing.
 
 License
 -------
-Copyright 2019 Song Huang and contributors.
+Copyright 2019 Jiaxuan Li, Song Huang and contributors.
 
 `Lvhuo` is free software made available under the MIT License. For details see the LICENSE file.
