@@ -252,7 +252,7 @@ def extract_obj(img, b=30, f=5, sigma=5, pixel_scale=0.168, minarea=5,
     if show_fig:
         fig, ax = plt.subplots(1,2, figsize=(12,6))
 
-        ax[0] = display_single(data_sub, ax=ax[0], scale_bar_length=60, pixel_scale=pixel_scale)
+        ax[0] = display_single(data_sub, ax=ax[0], scale_bar=False, pixel_scale=pixel_scale)
         from matplotlib.patches import Ellipse
         # plot an ellipse for each object
         for obj in objects:
@@ -280,6 +280,21 @@ def seg_remove_cen_obj(seg):
 
     return seg_copy
 
+def mask_remove_cen_obj(mask):
+    """Remove the central object from the binary 0-1 mask.
+    Parameters:
+        mask (numpy 2-D array): binary mask
+
+    Returns:
+        mask_copy (numpy 2-D array): a mask with central object removed
+    """
+    from scipy.ndimage import label
+    mask_copy = copy.deepcopy(mask)
+    seg = label(mask)[0]
+    mask_copy[seg == seg[int(seg.shape[0] / 2.0), int(seg.shape[1] / 2.0)]] = 0
+
+    return mask_copy
+
 def seg_remove_obj(seg, x, y):
     """Remove an object from the segmentation given its coordinate.
         
@@ -293,6 +308,22 @@ def seg_remove_obj(seg, x, y):
     seg_copy[seg == seg[int(y), int(x)]] = 0
 
     return seg_copy
+
+def mask_remove_obj(mask):
+    """Remove an object from the mask given its coordinate.
+        
+    Parameters:
+        mask (numpy 2-D array): binary mask
+        x, y (int): coordinates.
+    Returns:
+        mask_copy (numpy 2-D array): the mask with certain object removed
+    """
+    from scipy.ndimage import label
+    mask_copy = copy.deepcopy(mask)
+    seg = label(mask)[0]
+    mask_copy[seg == seg[int(y), int(x)]] = 0
+
+    return mask_copy
 
 # Save 2-D numpy array to `fits`
 def save_to_fits(img, fits_file, wcs=None, header=None, overwrite=True):
@@ -322,3 +353,55 @@ def save_to_fits(img, fits_file, wcs=None, header=None, overwrite=True):
     img_hdu.writeto(fits_file, overwrite=overwrite)
 
     return
+
+
+def psf_SBP(psf_path, msk_path, pixel_scale, iraf_path, step=0.10, 
+            sma_ini=10.0, sma_max=100.0, n_clip=3, maxTry=5, low_clip=3.0, upp_clip=2.5, 
+            outPre=None, verbose=True):
+    #from kungpao.galsbp import galSBP
+    from compsub.galSBP import galSBP
+    hdu = fits.open(psf_path)
+    psf = hdu[0].data
+    x_cen = psf.shape[1] // 2 + 1
+    y_cen = psf.shape[0] // 2 + 1
+    hdu.close()
+
+    ISO = iraf_path + 'x_isophote.e'
+    TBL = iraf_path + 'x_ttools.e'
+    integrade_mode = 'median'   # or 'mean', or 'bi-linear'
+    ell_fix, _ = galSBP(
+        psf_path,
+        mask=msk_path,
+        galX=x_cen,
+        galY=y_cen,
+        galQ=1.0,
+        galPA=0.0,
+        iniSma=sma_ini,
+        minSma=0.0,
+        maxSma=psf.shape[0]/2,
+        pix=1 / pixel_scale,
+        zpPhoto=0,
+        expTime=0,
+        stage=3,
+        ellipStep=step,
+        isophote=ISO,
+        xttools=TBL,
+        uppClip=upp_clip,
+        lowClip=low_clip,
+        nClip=n_clip,
+        maxTry=5,
+        fracBad=0.8,
+        maxIt=300,
+        recenter=False,
+        harmonics="none",
+        intMode=integrade_mode,
+        saveOut=True,
+        plMask=True,
+        verbose=verbose,
+        savePng=False,
+        updateIntens=False,
+        saveCsv=True,
+        suffix='',
+        location='./temp/',
+        outPre=outPre + '-ellip-fix')
+    return ell_fix

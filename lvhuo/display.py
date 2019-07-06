@@ -514,8 +514,8 @@ def draw_rectangles(img, catalog, colnames=['x', 'y'], header=None, ax=None, rec
         x, y = catalog[colnames[0]], catalog[colnames[1]]
     display_single(img, ax=ax1, pixel_scale=pixel_scale, **kwargs)
     for i in range(len(catalog)):
-        e = Rectangle(xy=(x[i] - rectangle_size[0] / 2, 
-                          y[i] - rectangle_size[1] / 2),
+        e = Rectangle(xy=(x[i] - rectangle_size[0] // 2, 
+                          y[i] - rectangle_size[1] // 2),
                         height=rectangle_size[0],
                         width=rectangle_size[1],
                         angle=0)
@@ -526,3 +526,103 @@ def draw_rectangles(img, catalog, colnames=['x', 'y'], header=None, ax=None, rec
         ax1.add_artist(e)
     if ax is not None:
         return ax
+
+
+# You can plot 1-D SBP using this, without plotting the PA and eccentricity.
+def psf_sbp(ell_fix, pixel_scale=0.168, ax=None, x_min=0.0, x_max=5.0, alpha=1, 
+    show_dots=False, show_grid=False, vertical_line=None, 
+    linecolor='firebrick', linestyle='-', linewidth=3, labelsize=25, 
+    ticksize=30, label='SBP', labelloc='lower left'):
+
+    """Display the 1-D profiles, without showing PA and ellipticity.
+    
+    Parameters:
+    -----------
+    ell_fix: astropy Table or numpy table, should be the output of ELLIPSE.
+    pixel_scale: float, pixel scale in arcsec/pixel.
+    zeropoint: float, zeropoint of the photometry system.
+    ax: matplotlib axes class.
+    offset: float.
+    x_min, x_max: float, in ^{1/4} scale.
+    alpha: float, transparency.
+    physical_unit: boolean. If true, the figure will be shown in physical scale.
+    show_dots: boolean. If true, it will show all the data points.
+    show_grid: boolean. If true, it will show a grid.
+    vertical_line: list of floats, positions of vertical lines. Maximum length is three.
+    linecolor, linestyle: string. Color and style of SBP.
+    label: string.
+
+    Returns:
+    --------
+    ax: matplotlib axes class.
+
+    """
+    if ax is None:
+        fig = plt.figure(figsize=(10, 10))
+        fig.subplots_adjust(left=0.0, right=1.0, 
+                            bottom=0.0, top=1.0,
+                            wspace=0.00, hspace=0.00)
+
+        ax1 = fig.add_axes([0.08, 0.07, 0.85, 0.88])
+        ax1.tick_params(direction='in')
+    else:
+        ax1 = ax
+        ax1.tick_params(direction='in')
+
+    # 1-D profile
+
+    x = ell_fix['sma'] * pixel_scale
+    y = np.log10((ell_fix['intens']) / (pixel_scale)**2)
+    y_upper = np.log10((ell_fix['intens'] + ell_fix['int_err']) / (pixel_scale) ** 2)
+    y_lower = np.log10((ell_fix['intens'] - ell_fix['int_err']) / (pixel_scale) ** 2)
+    upper_yerr = y_lower - y
+    lower_yerr = y - y_upper
+    asymmetric_error = [lower_yerr, upper_yerr]
+    xlabel = r'$R/\mathrm{arcsec}$'
+    #ylabel = r'$\mu\,[\mathrm{mag/arcsec^2}]$'
+
+    if show_grid:
+        ax1.grid(linestyle='--', alpha=0.4, linewidth=2)
+    if show_dots:
+        ax1.errorbar(x, y,
+                 yerr=asymmetric_error,
+                 color='k', alpha=0.2, fmt='o', 
+                 capsize=4, capthick=1, elinewidth=1)
+
+    if label is not None:
+        ax1.plot(x, y, color=linecolor, linewidth=linewidth, linestyle=linestyle,
+             label=r'$\mathrm{' + label + '}$', alpha=alpha)
+        leg = ax1.legend(fontsize=labelsize, frameon=False, loc=labelloc)
+        for l in leg.legendHandles:
+            l.set_alpha(1)
+    else:
+        ax1.plot(x, y, color=linecolor, linewidth=linewidth, linestyle=linestyle, alpha=alpha)
+    ax1.fill_between(x, y_upper, y_lower, color=linecolor, alpha=0.3*alpha)
+    
+    for tick in ax1.xaxis.get_major_ticks():
+        tick.label.set_fontsize(ticksize)
+    for tick in ax1.yaxis.get_major_ticks():
+        tick.label.set_fontsize(ticksize)
+
+    ax1.set_xlim(x_min, x_max)
+    ax1.set_xlabel(xlabel, fontsize=ticksize)
+    ax1.set_yticklabels([])
+    #yticks = ax1.get_yticks()
+    #ax1.set_yticklabels([r'$10^{' + str(int(u)) + '}$' for u in yticks])
+    ax1.invert_yaxis()
+
+    # Vertical line
+    if vertical_line is not None:
+        if len(vertical_line) > 3:
+            raise ValueError('Maximum length of vertical_line is 3.') 
+        ylim = ax1.get_ylim()
+        style_list = ['-', '--', '-.']
+        for k, pos in enumerate(vertical_line):
+            ax1.axvline(x=pos, ymin=0, ymax=1,
+                        color='gray', linestyle=style_list[k], linewidth=3, alpha=0.75)
+        plt.ylim(ylim)
+
+    # Return
+    if ax is None:
+        return fig
+    return ax1
