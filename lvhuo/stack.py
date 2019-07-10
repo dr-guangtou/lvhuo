@@ -155,26 +155,29 @@ class Stack(object):
             galimg = galimg.rotate(Angle(angle, unit=degrees))
             ny, nx = self.image.shape
             result = galimg.drawImage(scale=0.168, nx=nx, ny=ny)#, wcs=AstropyWCS(self.wcs))
-            self._image = result.array
             self.wcs = self._rotate_wcs(self.image, self.wcs, angle)
+            self._image = result.array
             return result.array
 
         elif method == 'spline':
             from scipy.ndimage.interpolation import rotate as rt
             assert 0 < order <= 5 and isinstance(order, int), 'order of ' + method + ' must be within 0-5.'
-            result = rt(self.image, angle, order=order, mode='constant', 
+            result = rt(self.image, -angle, order=order, mode='constant', 
                         cval=cval, reshape=reshape)
-            self._image = result
+            
             self.wcs = self._rotate_wcs(self.image, self.wcs, angle)
+            self._image = result
+            
             return result
         elif method in ['bicubic', 'nearest','cubic','bilinear']:
+            raise Warning("Cautious! Don't use ['bicubic', 'nearest', 'cubic', 'bilinear'] methods! They don't conserve the total flux!")
             try:
                 from scipy.misc import imrotate
             except:
                 raise ImportError('# Import `scipy.misc.imrotate` failed! This function may no longer be included in scipy!')
             result = imrotate(self.image, angle, interp=method)
-            self._image = result
             self.wcs = self._rotate_wcs(self.image, self.wcs, angle)
+            self._image = result.astype(bool)
             return result
         else:
             raise ValueError("# Not supported interpolation method. Use 'lanczos', 'spline', 'cubic', \
@@ -228,6 +231,7 @@ class Stack(object):
                 self.wcs = self._rotate_wcs(self.mask, self.wcs, angle)
                 return result
             elif method in ['bicubic', 'nearest','cubic','bilinear']:
+                raise Warning("Cautious! Don't use ['bicubic', 'nearest', 'cubic', 'bilinear'] methods! They don't conserve the total flux!")
                 try:
                     from scipy.misc import imrotate
                 except:
@@ -388,7 +392,7 @@ class Stack(object):
     # Magnify image/mask
     # TODO: figure out 'conserve surface brightness' or 'conserve flux' or something.
     def zoom_image(self, f, method='lanczos', order=5, cval=0.0):
-        '''Shift the image of Stack object.
+        '''Zoom the image of Stack object.
 
         Parameters:
             f (float): the positive factor of zoom. If 0 < f < 1, the image will be resized to smaller one.
@@ -433,6 +437,143 @@ class Stack(object):
         else:
             raise ValueError("# Not supported interpolation method. Use 'lanczos' or 'spline'.")
     # TODO: zoom_mask, zoom_Stack
+
+    def _resize_wcs(self, img, w, f):
+        w_temp = copy.deepcopy(w)
+        ra_cen, dec_cen = w_temp.wcs_pix2world(img.shape[1]//2, img.shape[0]//2, 0)
+        #print(ra_cen, dec_cen)
+        w_temp.wcs.crval = [ra_cen, dec_cen]
+        w_temp.wcs.crpix = [img.shape[1]//2 * f, img.shape[0]//2 * f]
+        # move the reference pixel to (0, 0)
+        w_temp.wcs.cd /= f
+        return w_temp
+    
+    def resize_image(self, f, method='lanczos', order=5, cval=0.0):
+        '''Zoom/Resize the image of Stack object. 
+        f > 1 means the image will be resampled! f < 1 means the image will be degraded.
+
+        Cautious: don't use ['bicubic', 'nearest', 'cubic', 'bilinear'] methods! They don't conserve the total flux!
+
+        Parameters:
+            f (float): the positive factor of zoom. If 0 < f < 1, the image will be resized to smaller one.
+            method (str): interpolation method. Use 'lanczos' or 'spline'.
+            order (int): the order of spline interpolation (within 0-5) or Lanczos interpolation (>0).
+            cval (scalar): value to fill the edges. Default is NaN.
+
+        Returns:
+            shift_image: ndarray.
+        '''
+        if method == 'lanczos':
+            try: # try to import galsim
+                from galsim import degrees, Angle
+                from galsim.interpolant import Lanczos
+                from galsim import Image, InterpolatedImage
+                from galsim.fitswcs import AstropyWCS
+            except:
+                raise ImportError('# Import `galsim` failed! Please check if `galsim` is installed!')
+
+            assert (order > 0) and isinstance(order, int), 'order of ' + method + ' must be positive interger.'
+            galimg = InterpolatedImage(Image(self.image, dtype=float), 
+                                    scale=0.168, x_interpolant=Lanczos(order))
+            #galimg = galimg.magnify(f)
+            ny, nx = self.image.shape
+            result = galimg.drawImage(scale=0.168 / f, nx=round(nx * f), ny=round(ny * f))#, wcs=AstropyWCS(self.wcs))
+            self.wcs = self._resize_wcs(self.image, self.wcs, f)
+            self._image = result.array
+            self.shape = self.image.shape
+            return result.array
+        elif method == 'spline':
+            from scipy.ndimage import zoom
+            assert 0 < order <= 5 and isinstance(order, int), 'order of ' + method + ' must be within 0-5.'
+            result = zoom(self.image, float(f), order=order, mode='constant', cval=cval)
+            self.wcs = self._resize_wcs(self.image, self.wcs, f)
+            self._image = result
+            self.shape = self.image.shape
+            return result
+        elif method in ['bicubic', 'nearest', 'cubic', 'bilinear']:
+            raise Warning("Cautious! Don't use ['bicubic', 'nearest', 'cubic', 'bilinear'] methods! They don't conserve the total flux!")
+            try:
+                from scipy.misc import imresize
+            except:
+                raise ImportError('# Import `scipy.misc.imresize` failed! This function may no longer be included in scipy!')
+            result = imresize(self.image, float(f), interp=method)
+            self.wcs = self._resize_wcs(self.image, self.wcs, f)
+            self._image = result.astype(float)
+            self.shape = self.image.shape
+            return result.astype(float)
+        else:
+            raise ValueError("# Not supported interpolation method. Use 'lanczos' or 'spline'.")
+    
+    def resize_mask(self, f, method='lanczos', order=5, cval=0.0):
+        '''Zoom/Resize the mask of Stack object.
+        Cautious: don't use ['bicubic', 'nearest', 'cubic', 'bilinear'] methods! They don't conserve the total flux!
+
+        Parameters:
+            f (float): the positive factor of zoom. If 0 < f < 1, the image will be resized to smaller one.
+            method (str): interpolation method. Use 'lanczos' or 'spline'.
+            order (int): the order of spline interpolation (within 0-5) or Lanczos interpolation (>0).
+            cval (scalar): value to fill the edges. Default is NaN.
+
+        Returns:
+            shift_image: ndarray.
+        '''
+        if method == 'lanczos':
+            try: # try to import galsim
+                from galsim import degrees, Angle
+                from galsim.interpolant import Lanczos
+                from galsim import Image, InterpolatedImage
+                from galsim.fitswcs import AstropyWCS
+            except:
+                raise ImportError('# Import `galsim` failed! Please check if `galsim` is installed!')
+
+            assert (order > 0) and isinstance(order, int), 'order of ' + method + ' must be positive interger.'
+            galimg = InterpolatedImage(Image(self.mask, dtype=float), 
+                                    scale=0.168, x_interpolant=Lanczos(order))
+            #galimg = galimg.magnify(f)
+            ny, nx = self.mask.shape
+            result = galimg.drawImage(scale=0.168 / f, nx=round(nx * f), ny=round(ny * f))#, wcs=AstropyWCS(self.wcs))
+            self.wcs = self._resize_wcs(self.mask, self.wcs, f)
+            self._mask = result.array
+            self.shape = self.mask.shape
+            return result.array
+        elif method == 'spline':
+            from scipy.ndimage import zoom
+            assert 0 < order <= 5 and isinstance(order, int), 'order of ' + method + ' must be within 0-5.'
+            result = zoom(self.mask, float(f), order=order, mode='constant', cval=cval)
+            self._mask = result
+            self.wcs = self._resize_wcs(self.mask, self.wcs, f)
+            self.shape = self.mask.shape
+            return result
+        elif method in ['bicubic', 'nearest', 'cubic', 'bilinear']:
+            raise Warning("Cautious! Don't use ['bicubic', 'nearest', 'cubic', 'bilinear'] methods! They don't conserve the total flux!")
+            try:
+                from scipy.misc import imresize
+            except:
+                raise ImportError('# Import `scipy.misc.imresize` failed! This function may no longer be included in scipy!')
+            result = imresize(self.mask, float(f), interp=method)
+            self._mask = result.astype(float)
+            self.wcs = self._resize_wcs(self.mask, self.wcs, f)
+            self.shape = self.mask.shape
+            return result.astype(float)
+        else:
+            raise ValueError("# Not supported interpolation method. Use 'lanczos' or 'spline'.")
+
+    def resize_Stack(self, f, method='lanczos', order=5, cval=0.0):
+        '''Resize the Stack object. f > 1 means the image will be resampled! f < 1 means the image will be degraded.
+
+        Parameters:
+            angle (float): rotation angle in degress, counterclockwise.
+            order (int): the order of spline interpolation, can be in the range 0-5.
+            reshape (bool): if True, the output shape is adapted so that the rorated image 
+                is contained completely in the output array.
+            cval (scalar): value to fill the edges. Default is NaN.
+        
+        Returns:
+        '''
+        self.resize_image(f, method=method, order=order, cval=cval)
+        if hasattr(self, 'mask'):
+            self.resize_mask(f, method=method, order=order, cval=cval)
+
 
     # Display image/mask
     def display_image(self):
