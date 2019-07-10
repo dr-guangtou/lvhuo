@@ -431,9 +431,9 @@ def display_multiple(data_array, text=None, ax=None, **kwargs):
         _, zmin, zmax = _display_single(data_array[0], add_text=text[0], ax=axes[0], **kwargs)
     for i in range(1, len(data_array)):
         if text is None:
-            _display_single(data_array[i], ax=axes[i], scale_manual=[zmin, zmax], **kwargs)
+            _display_single(data_array[i], ax=axes[i], scale_manual=[zmin, zmax], scale_bar=False, **kwargs)
         else:
-            _display_single(data_array[i], add_text=text[i], ax=axes[i], scale_manual=[zmin, zmax], **kwargs)
+            _display_single(data_array[i], add_text=text[i], ax=axes[i], scale_manual=[zmin, zmax], scale_bar=False, **kwargs)
 
     plt.subplots_adjust(wspace=0.0)
     if ax is None:

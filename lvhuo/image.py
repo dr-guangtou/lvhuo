@@ -156,7 +156,7 @@ def img_cutout(img, wcs, coord_1, coord_2, size=60.0, pix=0.168,
 
         hdu.writeto(fits_file, overwrite=True)
 
-    return cutout, [cen_pos, dx, dy]
+    return cutout, [cen_pos, dx, dy], cutout_header
 
 # evaluate_sky objects for a given image
 def extract_obj(img, b=30, f=5, sigma=5, pixel_scale=0.168, minarea=5, 
@@ -354,6 +354,59 @@ def save_to_fits(img, fits_file, wcs=None, header=None, overwrite=True):
 
     return
 
+def azimuthal_average(image, center=None, stddev=True, binsize=0.5, interpnan=False):
+    """
+    Modified based on https://github.com/keflavich/image_tools/blob/master/image_tools/radialprofile.py
+    Calculate the azimuthally averaged radial profile.
+    
+    Parameters:
+        imgae (numpy ndarray): 2-D image
+        center (list): [x, y] pixel coordinates. If None, use image center.
+            Note that x is horizontal and y is vertical, y, x = image.shape.
+        stdev (bool): if True, the stdev of profile will also be returned.
+        binsize (float): size of the averaging bin. Can lead to strange results if
+            non-binsize factors are used to specify the center and the binsize is
+            too large.
+        interpnan (bool): Interpolate over NAN values, i.e. bins where there is no data?
+    
+    Returns:
+        If `stdev == True`, it will return [radius, profile, stdev]; 
+        else, it will return [radius, profile].
+    """
+    # Calculate the indices from the image
+    y, x = np.indices(image.shape)
+
+    if center is None:
+        center = np.array([(x.max() - x.min()) / 2.0, (y.max() - y.min()) / 2.0])
+
+    r = np.hypot(x - center[0], y - center[1])
+    
+    # The 'bins' as initially defined are lower/upper bounds for each bin
+    # so that values will be in [lower,upper)  
+    nbins = int(np.round(r.max() / binsize) + 1)
+    maxbin = nbins * binsize
+    bins = np.linspace(0, maxbin, nbins + 1)
+    # We're probably more interested in the bin centers than their left or right sides...
+    bin_centers = (bins[1:] + bins[:-1]) / 2.0
+
+    # There are never any in bin 0, because the lowest index returned by digitize is 1
+    nr = np.histogram(r, bins)[0] # nr is how many pixels are within each bin
+    
+    # Radial profile itself
+    profile = np.histogram(r, bins, weights=image)[0] / nr
+    
+    if interpnan:
+        profile = np.interp(bin_centers, bin_centers[~np.isnan(profile)],
+                            profile[~np.isnan(profile)])
+    if stddev:
+        # Find out which radial bin each point in the map belongs to
+        # recall that bins are from 1 to nbins
+        whichbin = np.digitize(r.ravel(), bins)
+        profile_std = np.array([image.ravel()[whichbin == b].std() for b in range(1, nbins + 1)])
+        profile_std /= np.sqrt(nr) # 均值的偏差
+        return [bin_centers, profile, profile_std]
+    else:
+        return [bin_centers, profile]
 
 def psf_SBP(psf_path, msk_path, pixel_scale, iraf_path, step=0.10, 
             sma_ini=10.0, sma_max=100.0, n_clip=3, maxTry=5, low_clip=3.0, upp_clip=2.5, 
