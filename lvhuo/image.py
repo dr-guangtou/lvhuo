@@ -266,7 +266,6 @@ def extract_obj(img, b=30, f=5, sigma=5, pixel_scale=0.168, minarea=5,
         ax[1] = display_single(segmap, scale='linear', cmap=SEG_CMAP , ax=ax[1])
     return objects, segmap
 
-
 def seg_remove_cen_obj(seg):
     """Remove the central object from the segmentation.
     Parameters:

@@ -79,19 +79,33 @@ class Stack(object):
         Returns:
             None
         """
-        if self.wcs is not None:
-            wcs_header = self.wcs.to_header()
-            img_hdu = fits.PrimaryHDU(self.image, header=wcs_header)
-        else:
-            img_hdu = fits.PrimaryHDU(self.image)
-
+        img_hdu = fits.PrimaryHDU(self.image)
+        self.header['NAXIS1'] = self.image.shape[1]
+        self.header['NAXIS0'] = self.image.shape[0]
+        
         if self.header is not None:
             img_hdu.header = self.header
+            if self.wcs is not None:
+                wcs_header = self.wcs.to_header()
+                import fnmatch
+                for i in self.header:
+                    if i in wcs_header:
+                        self.header[i] = wcs_header[i]
+                    if fnmatch.fnmatch(i, 'CD?_?'):
+                        self.header[i] = wcs_header['PC' + i.lstrip('CD')]
+                img_hdu.header = self.header
+        elif self.wcs is not None:
+            wcs_header = self.wcs.to_header()
+            img_hdu.header = wcs_header
+        
+        else:
+            img_hdu = fits.PrimaryHDU(self.image)
 
         if os.path.islink(fits_file_name):
             os.unlink(fits_file_name)
 
-        img_hdu.writeto(fits_file_name, output_verify='warn', overwrite=overwrite)
+        img_hdu.writeto(fits_file_name, overwrite=overwrite)
+        return img_hdu
 
     def _rotate_wcs(self, img, w, theta):
         """Rotate the WCS of a given image. 
@@ -157,6 +171,7 @@ class Stack(object):
             result = galimg.drawImage(scale=0.168, nx=nx, ny=ny)#, wcs=AstropyWCS(self.wcs))
             self.wcs = self._rotate_wcs(self.image, self.wcs, angle)
             self._image = result.array
+            self._wcs_header_merge()
             return result.array
 
         elif method == 'spline':
@@ -167,7 +182,7 @@ class Stack(object):
             
             self.wcs = self._rotate_wcs(self.image, self.wcs, angle)
             self._image = result
-            
+            self._wcs_header_merge()
             return result
         elif method in ['bicubic', 'nearest','cubic','bilinear']:
             raise Warning("Cautious! Don't use ['bicubic', 'nearest', 'cubic', 'bilinear'] methods! They don't conserve the total flux!")
@@ -178,6 +193,7 @@ class Stack(object):
             result = imrotate(self.image, angle, interp=method)
             self.wcs = self._rotate_wcs(self.image, self.wcs, angle)
             self._image = result.astype(bool)
+            self._wcs_header_merge()
             return result
         else:
             raise ValueError("# Not supported interpolation method. Use 'lanczos', 'spline', 'cubic', \
@@ -220,6 +236,7 @@ class Stack(object):
                 result = galimg.drawImage(scale=0.168, nx=nx, ny=ny) #, wcs=AstropyWCS(self.wcs))
                 self._mask = (result.array > 0.5).astype(float)
                 self.wcs = self._rotate_wcs(self.mask, self.wcs, angle)
+                self._wcs_header_merge()
                 return result.array
 
             elif method == 'spline':
@@ -229,6 +246,7 @@ class Stack(object):
                             cval=cval, reshape=reshape)
                 self._mask = (result > 0.5).astype(float)
                 self.wcs = self._rotate_wcs(self.mask, self.wcs, angle)
+                self._wcs_header_merge()
                 return result
             elif method in ['bicubic', 'nearest','cubic','bilinear']:
                 raise Warning("Cautious! Don't use ['bicubic', 'nearest', 'cubic', 'bilinear'] methods! They don't conserve the total flux!")
@@ -239,6 +257,7 @@ class Stack(object):
                 result = imrotate(self.mask, -angle, interp=method)
                 self._mask = (result > 0.5).astype(float)
                 self.wcs = self._rotate_wcs(self.mask, self.wcs, angle)
+                self._wcs_header_merge()
                 return result
             else:
                 raise ValueError("# Not supported interpolation method. Use 'lanczos', 'spline', 'cubic', \
@@ -299,6 +318,7 @@ class Stack(object):
             hdr['CRPIX2'] += dy
             self.header = hdr
             self.wcs = wcs.WCS(hdr)
+            self._wcs_header_merge()
             return result.array
         elif method == 'spline':
             from scipy.ndimage.interpolation import shift
@@ -311,6 +331,7 @@ class Stack(object):
             hdr['CRPIX2'] += dy
             self.header = hdr
             self.wcs = wcs.WCS(hdr)
+            self._wcs_header_merge()
             return result
         else:
             raise ValueError("# Not supported interpolation method. Use 'lanczos' or 'spline'.")
@@ -356,6 +377,7 @@ class Stack(object):
             hdr['CRPIX2'] += dy
             self.header = hdr
             self.wcs = wcs.WCS(hdr)
+            self._wcs_header_merge()
             return result.array
         elif method == 'spline':
             from scipy.ndimage.interpolation import shift
@@ -368,6 +390,7 @@ class Stack(object):
             hdr['CRPIX2'] += dy
             self.header = hdr
             self.wcs = wcs.WCS(hdr)
+            self._wcs_header_merge()
             return result
         else:
             raise ValueError("# Not supported interpolation method. Use 'lanczos' or 'spline'.")
@@ -389,55 +412,7 @@ class Stack(object):
         if hasattr(self, 'mask'):
             self.shift_mask(dx, dy, method=method, order=order, cval=cval)
     
-    # Magnify image/mask
-    # TODO: figure out 'conserve surface brightness' or 'conserve flux' or something.
-    def zoom_image(self, f, method='lanczos', order=5, cval=0.0):
-        '''Zoom the image of Stack object.
-
-        Parameters:
-            f (float): the positive factor of zoom. If 0 < f < 1, the image will be resized to smaller one.
-            method (str): interpolation method. Use 'lanczos' or 'spline'.
-            order (int): the order of spline interpolation (within 0-5) or Lanczos interpolation (>0).
-            cval (scalar): value to fill the edges. Default is NaN.
-
-        Returns:
-            shift_image: ndarray.
-        '''
-        if method == 'lanczos':
-            try: # try to import galsim
-                from galsim import degrees, Angle
-                from galsim.interpolant import Lanczos
-                from galsim import Image, InterpolatedImage
-                from galsim.fitswcs import AstropyWCS
-            except:
-                raise ImportError('# Import `galsim` failed! Please check if `galsim` is installed!')
-
-            assert (order > 0) and isinstance(order, int), 'order of ' + method + ' must be positive interger.'
-            galimg = InterpolatedImage(Image(self.image, dtype=float), 
-                                    scale=0.168, x_interpolant=Lanczos(order))
-            #galimg = galimg.magnify(f)
-            ny, nx = self.image.shape
-            result = galimg.drawImage(scale=0.168 / f, nx=round(nx * f), ny=round(ny * f))#, wcs=AstropyWCS(self.wcs))
-            self._image = result.array
-            return result.array
-        elif method == 'spline':
-            from scipy.ndimage import zoom
-            assert 0 < order <= 5 and isinstance(order, int), 'order of ' + method + ' must be within 0-5.'
-            result = zoom(self.image, f, order=order, mode='constant', cval=cval)
-            self._image = result
-            return result
-        elif method in ['bicubic', 'nearest','cubic','bilinear']:
-            try:
-                from scipy.misc import imresize
-            except:
-                raise ImportError('# Import `scipy.misc.imresize` failed! This function may no longer be included in scipy!')
-            result = imresize(self.image, f, interp=method)
-            self._image = result.astype(float)
-            return result.astype(float)
-        else:
-            raise ValueError("# Not supported interpolation method. Use 'lanczos' or 'spline'.")
-    # TODO: zoom_mask, zoom_Stack
-
+    # Resize image/mask
     def _resize_wcs(self, img, w, f):
         w_temp = copy.deepcopy(w)
         ra_cen, dec_cen = w_temp.wcs_pix2world(img.shape[1]//2, img.shape[0]//2, 0)
@@ -448,6 +423,22 @@ class Stack(object):
         w_temp.wcs.cd /= f
         return w_temp
     
+    def _wcs_header_merge(self):
+        """
+        Look! this function must be used just before `return`! If you use it earlier, you'll make big trouble!
+        """
+        if self.wcs is not None:
+            wcs_header = self.wcs.to_header()
+            import fnmatch
+            for i in self.header:
+                if i in wcs_header:
+                    self.header[i] = wcs_header[i]
+                if fnmatch.fnmatch(i, 'CD?_?'):
+                    self.header[i] = wcs_header['PC' + i.lstrip('CD')]
+        self.header['NAXIS1'] = self.image.shape[1]
+        self.header['NAXIS2'] = self.image.shape[0]
+
+
     def resize_image(self, f, method='lanczos', order=5, cval=0.0):
         '''Zoom/Resize the image of Stack object. 
         f > 1 means the image will be resampled! f < 1 means the image will be degraded.
@@ -481,6 +472,7 @@ class Stack(object):
             self.wcs = self._resize_wcs(self.image, self.wcs, f)
             self._image = result.array
             self.shape = self.image.shape
+            self._wcs_header_merge()
             return result.array
         elif method == 'spline':
             from scipy.ndimage import zoom
@@ -489,6 +481,7 @@ class Stack(object):
             self.wcs = self._resize_wcs(self.image, self.wcs, f)
             self._image = result
             self.shape = self.image.shape
+            self._wcs_header_merge()
             return result
         elif method in ['bicubic', 'nearest', 'cubic', 'bilinear']:
             raise Warning("Cautious! Don't use ['bicubic', 'nearest', 'cubic', 'bilinear'] methods! They don't conserve the total flux!")
@@ -500,6 +493,7 @@ class Stack(object):
             self.wcs = self._resize_wcs(self.image, self.wcs, f)
             self._image = result.astype(float)
             self.shape = self.image.shape
+            self._wcs_header_merge()
             return result.astype(float)
         else:
             raise ValueError("# Not supported interpolation method. Use 'lanczos' or 'spline'.")
@@ -535,6 +529,7 @@ class Stack(object):
             self.wcs = self._resize_wcs(self.mask, self.wcs, f)
             self._mask = result.array
             self.shape = self.mask.shape
+            self._wcs_header_merge()
             return result.array
         elif method == 'spline':
             from scipy.ndimage import zoom
@@ -543,6 +538,7 @@ class Stack(object):
             self._mask = result
             self.wcs = self._resize_wcs(self.mask, self.wcs, f)
             self.shape = self.mask.shape
+            self._wcs_header_merge()
             return result
         elif method in ['bicubic', 'nearest', 'cubic', 'bilinear']:
             raise Warning("Cautious! Don't use ['bicubic', 'nearest', 'cubic', 'bilinear'] methods! They don't conserve the total flux!")
@@ -554,6 +550,7 @@ class Stack(object):
             self._mask = result.astype(float)
             self.wcs = self._resize_wcs(self.mask, self.wcs, f)
             self.shape = self.mask.shape
+            self._wcs_header_merge()
             return result.astype(float)
         else:
             raise ValueError("# Not supported interpolation method. Use 'lanczos' or 'spline'.")
@@ -576,15 +573,15 @@ class Stack(object):
 
 
     # Display image/mask
-    def display_image(self):
-        display_single(self.image, scale_bar_length=self.scale_bar_length)
-    def display_mask(self):
+    def display_image(self, **kwargs):
+        display_single(self.image, scale_bar_length=self.scale_bar_length, **kwargs)
+    def display_mask(self, **kwargs):
         display_single(self.mask, scale='linear', 
-                        cmap=SEG_CMAP, scale_bar_length=self.scale_bar_length)
-    def display_Stack(self):
+                        cmap=SEG_CMAP, scale_bar_length=self.scale_bar_length, **kwargs)
+    def display_Stack(self, **kwargs):
         if hasattr(self, 'mask'):
             display_single(self.image * (~self.mask.astype(bool)), 
-                            scale_bar_length=self.scale_bar_length)
+                            scale_bar_length=self.scale_bar_length, **kwargs)
         else:
             self.display_image()
        
