@@ -93,6 +93,35 @@ class Stack(object):
 
         img_hdu.writeto(fits_file_name, output_verify='warn', overwrite=overwrite)
 
+    def _rotate_wcs(self, img, w, theta):
+        """Rotate the WCS of a given image. 
+        See: https://github.com/astropy/astropy/issues/5175, https://arxiv.org/pdf/astro-ph/0207407.pdf.
+        Parameters:
+            img (2-D array): input image.
+            w (astropy.wcs.WCS object): wcs of the input image.
+            theta (float): rotation angle in degrees, counterclockwise.
+        
+        Return:
+            wcs_temp: rotated WCS.
+        """
+        w_temp = copy.deepcopy(w)
+        _theta = np.deg2rad(theta)
+        # Rotation matrix
+        _mrot = np.zeros(shape=(2, 2), dtype=np.double)
+        _mrot[0] = (np.cos(_theta), np.sin(_theta))
+        _mrot[1] = (-np.sin(_theta), np.cos(_theta))
+        # New transforming matrix
+        new_cd = np.dot(w_temp.wcs.cd, _mrot)
+        w_temp.wcs.cd = new_cd
+        # Rotate reference pixel position
+        ref_pix = w_temp.wcs.crpix.reshape(-1, 1)
+        ref_pix -= np.array([[img.shape[1]//2], [img.shape[0]//2]]) 
+        # change the reference pixel relative to image center
+        ref_pix = np.dot(_mrot.T, ref_pix)
+        ref_pix += np.array([[img.shape[1]//2], [img.shape[0]//2]])
+        w_temp.wcs.crpix = ref_pix.reshape(1, -1)[0]
+        return w_temp
+
     # Rotate image/mask
     def rotate_image(self, angle, method='lanczos', order=5, reshape=False, cval=0.0):
         '''Rotate the image of Stack object.
@@ -127,6 +156,7 @@ class Stack(object):
             ny, nx = self.image.shape
             result = galimg.drawImage(scale=0.168, nx=nx, ny=ny)#, wcs=AstropyWCS(self.wcs))
             self._image = result.array
+            self.wcs = self._rotate_wcs(self.image, self.wcs, angle)
             return result.array
 
         elif method == 'spline':
@@ -135,6 +165,7 @@ class Stack(object):
             result = rt(self.image, angle, order=order, mode='constant', 
                         cval=cval, reshape=reshape)
             self._image = result
+            self.wcs = self._rotate_wcs(self.image, self.wcs, angle)
             return result
         elif method in ['bicubic', 'nearest','cubic','bilinear']:
             try:
@@ -143,6 +174,7 @@ class Stack(object):
                 raise ImportError('# Import `scipy.misc.imrotate` failed! This function may no longer be included in scipy!')
             result = imrotate(self.image, angle, interp=method)
             self._image = result
+            self.wcs = self._rotate_wcs(self.image, self.wcs, angle)
             return result
         else:
             raise ValueError("# Not supported interpolation method. Use 'lanczos', 'spline', 'cubic', \
@@ -184,6 +216,7 @@ class Stack(object):
                 ny, nx = self.image.shape
                 result = galimg.drawImage(scale=0.168, nx=nx, ny=ny) #, wcs=AstropyWCS(self.wcs))
                 self._mask = (result.array > 0.5).astype(float)
+                self.wcs = self._rotate_wcs(self.mask, self.wcs, angle)
                 return result.array
 
             elif method == 'spline':
@@ -192,6 +225,7 @@ class Stack(object):
                 result = rt(self.mask, -angle, order=order, mode='constant', 
                             cval=cval, reshape=reshape)
                 self._mask = (result > 0.5).astype(float)
+                self.wcs = self._rotate_wcs(self.mask, self.wcs, angle)
                 return result
             elif method in ['bicubic', 'nearest','cubic','bilinear']:
                 try:
@@ -200,6 +234,7 @@ class Stack(object):
                     raise ImportError('# Import `scipy.misc.imrotate` failed! This function may no longer be included in scipy!')
                 result = imrotate(self.mask, -angle, interp=method)
                 self._mask = (result > 0.5).astype(float)
+                self.wcs = self._rotate_wcs(self.mask, self.wcs, angle)
                 return result
             else:
                 raise ValueError("# Not supported interpolation method. Use 'lanczos', 'spline', 'cubic', \
@@ -223,7 +258,7 @@ class Stack(object):
 
     # Shift image/mask
     def shift_image(self, dx, dy, method='lanczos', order=5, cval=0.0):
-        '''Shift the image of Stack object.
+        '''Shift the image of Stack object. The WCS of image will also be changed.
 
         Parameters:
             dx, dy (float): shift distance (in pixel) along x (horizontal) and y (vertical). 
@@ -254,12 +289,24 @@ class Stack(object):
             galimg = galimg.shift(dx=dx * 0.168, dy=dy * 0.168)
             result = galimg.drawImage(scale=0.168, nx=nx, ny=ny)#, wcs=AstropyWCS(self.wcs))
             self._image = result.array
+            # Change the WCS of image
+            hdr = copy.deepcopy(self.header)
+            hdr['CRPIX1'] += dx
+            hdr['CRPIX2'] += dy
+            self.header = hdr
+            self.wcs = wcs.WCS(hdr)
             return result.array
         elif method == 'spline':
             from scipy.ndimage.interpolation import shift
             assert 0 < order <= 5 and isinstance(order, int), 'order of ' + method + ' must be within 0-5.'
             result = shift(self.image, [dy, dx], order=order, mode='constant', cval=cval)
             self._image = result
+            # Change the WCS of image
+            hdr = copy.deepcopy(self.header)
+            hdr['CRPIX1'] -= dx
+            hdr['CRPIX2'] += dy
+            self.header = hdr
+            self.wcs = wcs.WCS(hdr)
             return result
         else:
             raise ValueError("# Not supported interpolation method. Use 'lanczos' or 'spline'.")
@@ -299,12 +346,24 @@ class Stack(object):
             galimg = galimg.shift(dx=dx * 0.168, dy=dy * 0.168)
             result = galimg.drawImage(scale=0.168, nx=nx, ny=ny)#, wcs=AstropyWCS(self.wcs))
             self._mask = (result.array > 0.5).astype(float)
+            # Change the WCS of image
+            hdr = copy.deepcopy(self.header)
+            hdr['CRPIX1'] += dx
+            hdr['CRPIX2'] += dy
+            self.header = hdr
+            self.wcs = wcs.WCS(hdr)
             return result.array
         elif method == 'spline':
             from scipy.ndimage.interpolation import shift
             assert 0 < order <= 5 and isinstance(order, int), 'order of ' + method + ' must be within 0-5.'
             result = shift(self.mask, [dy, dx], order=order, mode='constant', cval=cval)
             self._mask = (result > 0.5).astype(float)
+            # Change the WCS of image
+            hdr = copy.deepcopy(self.header)
+            hdr['CRPIX1'] += dx
+            hdr['CRPIX2'] += dy
+            self.header = hdr
+            self.wcs = wcs.WCS(hdr)
             return result
         else:
             raise ValueError("# Not supported interpolation method. Use 'lanczos' or 'spline'.")
@@ -395,17 +454,19 @@ class StackSky(Stack):
         self.name = 'sky'
         self.scale_bar_length = 1
         from unagi.sky import SkyObjs, AperPhot, S18A_APER, S18A_APER_ID
-        cutout, cen_pos = img_cutout(self.image, self.wcs, skyobj['ra'], skyobj['dec'], 
-                                     size=2 * S18A_APER[aper_name].r_arcsec, save=False)
+        cutout, cen_pos, cutout_header = img_cutout(self.image, self.wcs, skyobj['ra'], skyobj['dec'], 
+                                         size=2 * S18A_APER[aper_name].r_arcsec, save=False)
         self._image = cutout.data
         self.shape = self.image.shape
+        self.wcs = cutout.wcs
+        self.header = cutout_header
         self.cen_xy = cen_pos[0]
         self.dx = cen_pos[1]
         self.dy = cen_pos[2]
         
 
         if hasattr(self, 'mask'):
-            cutout, _ = img_cutout(self.mask, self.wcs, skyobj['ra'], skyobj['dec'], 
+            cutout, _, _ = img_cutout(self.mask, self.wcs, skyobj['ra'], skyobj['dec'], 
                                    size=2 * S18A_APER[aper_name].r_arcsec, save=False)
             self._mask = cutout.data
 

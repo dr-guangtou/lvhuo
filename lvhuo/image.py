@@ -156,7 +156,7 @@ def img_cutout(img, wcs, coord_1, coord_2, size=60.0, pix=0.168,
 
         hdu.writeto(fits_file, overwrite=True)
 
-    return cutout, [cen_pos, dx, dy]
+    return cutout, [cen_pos, dx, dy], cutout_header
 
 # evaluate_sky objects for a given image
 def extract_obj(img, b=30, f=5, sigma=5, pixel_scale=0.168, minarea=5, 
