@@ -431,9 +431,9 @@ def display_multiple(data_array, text=None, ax=None, **kwargs):
         _, zmin, zmax = _display_single(data_array[0], add_text=text[0], ax=axes[0], **kwargs)
     for i in range(1, len(data_array)):
         if text is None:
-            _display_single(data_array[i], ax=axes[i], scale_manual=[zmin, zmax], scale_bar=False, **kwargs)
+            _display_single(data_array[i], ax=axes[i], scale_manual=[zmin, zmax],  **kwargs)
         else:
-            _display_single(data_array[i], add_text=text[i], ax=axes[i], scale_manual=[zmin, zmax], scale_bar=False, **kwargs)
+            _display_single(data_array[i], add_text=text[i], ax=axes[i], scale_manual=[zmin, zmax], **kwargs)
 
     plt.subplots_adjust(wspace=0.0)
     if ax is None:
@@ -529,7 +529,7 @@ def draw_rectangles(img, catalog, colnames=['x', 'y'], header=None, ax=None, rec
 
 
 # You can plot 1-D SBP using this, without plotting the PA and eccentricity.
-def psf_sbp(ell_fix, pixel_scale=0.168, ax=None, x_min=0.0, x_max=5.0, alpha=1, 
+def show_psf_sbp(ell_fix, pixel_scale=0.168, ax=None, x_min=0.0, x_max=5.0, alpha=1, 
     show_dots=False, show_grid=False, vertical_line=None, 
     linecolor='firebrick', linestyle='-', linewidth=3, labelsize=25, 
     ticksize=30, label='SBP', labelloc='lower left'):
@@ -543,7 +543,7 @@ def psf_sbp(ell_fix, pixel_scale=0.168, ax=None, x_min=0.0, x_max=5.0, alpha=1,
     zeropoint: float, zeropoint of the photometry system.
     ax: matplotlib axes class.
     offset: float.
-    x_min, x_max: float, in ^{1/4} scale.
+    x_min, x_max: float, in linear scale.
     alpha: float, transparency.
     physical_unit: boolean. If true, the figure will be shown in physical scale.
     show_dots: boolean. If true, it will show all the data points.
@@ -575,6 +575,10 @@ def psf_sbp(ell_fix, pixel_scale=0.168, ax=None, x_min=0.0, x_max=5.0, alpha=1,
     y = np.log10((ell_fix['intens']) / (pixel_scale)**2)
     y_upper = np.log10((ell_fix['intens'] + ell_fix['int_err']) / (pixel_scale) ** 2)
     y_lower = np.log10((ell_fix['intens'] - ell_fix['int_err']) / (pixel_scale) ** 2)
+    x = np.concatenate((-np.flip(x), x))
+    y = np.concatenate((np.flip(y), y))
+    y_upper = np.concatenate((np.flip(y_upper), y_upper))
+    y_lower = np.concatenate((np.flip(y_lower), y_lower))
     upper_yerr = y_lower - y
     lower_yerr = y - y_upper
     asymmetric_error = [lower_yerr, upper_yerr]
@@ -599,12 +603,18 @@ def psf_sbp(ell_fix, pixel_scale=0.168, ax=None, x_min=0.0, x_max=5.0, alpha=1,
         ax1.plot(x, y, color=linecolor, linewidth=linewidth, linestyle=linestyle, alpha=alpha)
     ax1.fill_between(x, y_upper, y_lower, color=linecolor, alpha=0.3*alpha)
     
+    ylim = ax1.get_ylim()
+    for i in range(len(y_lower)):
+        if np.isnan(y_lower[i]):
+            y_lower[i] = min(ylim)
+    ax1.fill_between(x, y_upper, y_lower, color=linecolor, alpha=0.1*alpha, label=None)
+    
     for tick in ax1.xaxis.get_major_ticks():
         tick.label.set_fontsize(ticksize)
     for tick in ax1.yaxis.get_major_ticks():
         tick.label.set_fontsize(ticksize)
 
-    ax1.set_xlim(x_min, x_max)
+    ax1.set_xlim(-x_max, x_max)
     ax1.set_xlabel(xlabel, fontsize=ticksize)
     ax1.set_yticklabels([])
     #yticks = ax1.get_yticks()

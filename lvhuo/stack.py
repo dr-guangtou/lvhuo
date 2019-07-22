@@ -13,6 +13,7 @@ from astropy.coordinates import SkyCoord
 from .display import display_single, SEG_CMAP
 from .image import img_cutout
 
+
 class Stack(object):
     '''
     Class for `Stack` object.
@@ -20,6 +21,10 @@ class Stack(object):
     def __init__(self, img, mask=None, header=None, data_release='s18a'):
         '''Initialize stack object'''
         self.header = header
+        try:
+            self.pixel_scale = abs(header['CD1_1'] * 3600)
+        except:
+            self.pixel_scale = abs(header['PC1_1'] * 3600)
         self.wcs = wcs.WCS(header)
         self.shape = img.shape # in ndarray format
         self.data_release = data_release
@@ -70,19 +75,24 @@ class Stack(object):
         self._variance = variance_array
 
     # Save 2-D numpy array to `fits`
-    def save_to_fits(self, fits_file_name, overwrite=True):
+    def save_to_fits(self, fits_file_name, data='image', overwrite=True):
         """Save numpy 2-D arrays to `fits` file. (from `kungpao`)
         Parameters:
+            data (str): can be 'image' or 'mask'
             fits_file_name (str): File name of `fits` file
             overwrite (bool): Default is True
 
         Returns:
             None
         """
-        img_hdu = fits.PrimaryHDU(self.image)
-        self.header['NAXIS1'] = self.image.shape[1]
-        self.header['NAXIS0'] = self.image.shape[0]
-        
+        if data == 'image':
+            data_use = self.image
+        elif data == 'mask':
+            data_use = self.mask
+        else:
+            raise ValueError('Data can only be "image" or "mask".')
+        img_hdu = fits.PrimaryHDU(data_use)
+
         if self.header is not None:
             img_hdu.header = self.header
             if self.wcs is not None:
@@ -99,7 +109,7 @@ class Stack(object):
             img_hdu.header = wcs_header
         
         else:
-            img_hdu = fits.PrimaryHDU(self.image)
+            img_hdu = fits.PrimaryHDU(data_use)
 
         if os.path.islink(fits_file_name):
             os.unlink(fits_file_name)
@@ -165,10 +175,10 @@ class Stack(object):
             # Begin rotation
             assert (order > 0) and isinstance(order, int), 'order of ' + method + ' must be positive interger.'
             galimg = InterpolatedImage(Image(self.image, dtype=float), 
-                                       scale=0.168, x_interpolant=Lanczos(order))
+                                       scale=self.pixel_scale, x_interpolant=Lanczos(order))
             galimg = galimg.rotate(Angle(angle, unit=degrees))
             ny, nx = self.image.shape
-            result = galimg.drawImage(scale=0.168, nx=nx, ny=ny)#, wcs=AstropyWCS(self.wcs))
+            result = galimg.drawImage(scale=self.pixel_scale, nx=nx, ny=ny)#, wcs=AstropyWCS(self.wcs))
             self.wcs = self._rotate_wcs(self.image, self.wcs, angle)
             self._image = result.array
             self._wcs_header_merge()
@@ -230,10 +240,10 @@ class Stack(object):
                 # Begin rotation
                 assert (order > 0) and isinstance(order, int), 'order of ' + method + ' must be positive interger.'
                 galimg = InterpolatedImage(Image(self.mask, dtype=float), 
-                                        scale=0.168, x_interpolant=Lanczos(order))
+                                        scale=self.pixel_scale, x_interpolant=Lanczos(order))
                 galimg = galimg.rotate(Angle(angle, unit=degrees))
                 ny, nx = self.image.shape
-                result = galimg.drawImage(scale=0.168, nx=nx, ny=ny) #, wcs=AstropyWCS(self.wcs))
+                result = galimg.drawImage(scale=self.pixel_scale, nx=nx, ny=ny) #, wcs=AstropyWCS(self.wcs))
                 self._mask = (result.array > 0.5).astype(float)
                 self.wcs = self._rotate_wcs(self.mask, self.wcs, angle)
                 self._wcs_header_merge()
@@ -287,7 +297,7 @@ class Stack(object):
             dx, dy (float): shift distance (in pixel) along x (horizontal) and y (vertical). 
                 Note that elements in one row has the same y but different x. 
                 Example: dx = 2 is to shift the image "RIGHT", dy = 3 is to shift the image "UP".
-            method (str): interpolation method. Use 'lanczos' or 'spline'.
+            method (str): interpolation method. Use 'lanczos' or 'spline' or 'iraf'.
             order (int): the order of spline interpolation (within 0-5) or Lanczos interpolation (>0).
             cval (scalar): value to fill the edges. Default is NaN.
 
@@ -308,9 +318,9 @@ class Stack(object):
             # Begin shift
             assert (order > 0) and isinstance(order, int), 'order of ' + method + ' must be positive interger.'
             galimg = InterpolatedImage(Image(self.image, dtype=float), 
-                                    scale=0.168, x_interpolant=Lanczos(order))
-            galimg = galimg.shift(dx=dx * 0.168, dy=dy * 0.168)
-            result = galimg.drawImage(scale=0.168, nx=nx, ny=ny)#, wcs=AstropyWCS(self.wcs))
+                                    scale=self.pixel_scale, x_interpolant=Lanczos(order))
+            galimg = galimg.shift(dx=dx * self.pixel_scale, dy=dy * self.pixel_scale)
+            result = galimg.drawImage(scale=self.pixel_scale, nx=nx, ny=ny)#, wcs=AstropyWCS(self.wcs))
             self._image = result.array
             # Change the WCS of image
             hdr = copy.deepcopy(self.header)
@@ -320,6 +330,21 @@ class Stack(object):
             self.wcs = wcs.WCS(hdr)
             self._wcs_header_merge()
             return result.array
+        elif method == 'iraf':
+            try:
+                from pyraf import iraf
+            except:
+                raise ImportError('# Import `iraf` failed! Please check if `pyraf` and `iraf` is installed!')
+            self.save_to_fits('./_temp.fits', 'image')
+            iraf.imdel('./_shift_temp.fits')
+            iraf.imshift('./_temp.fits', './_shift_temp.fits', dx, dy, bound='constant', const=0.)
+            hdu = fits.open('./_shift_temp.fits')
+            self.image = hdu[0].data
+            self.shape = hdu[0].data.shape
+            self.header = hdu[0].header
+            self.wcs = wcs.WCS(self.header)
+            hdu.close()
+            iraf.imdel('./*temp.fits')
         elif method == 'spline':
             from scipy.ndimage.interpolation import shift
             assert 0 < order <= 5 and isinstance(order, int), 'order of ' + method + ' must be within 0-5.'
@@ -343,7 +368,7 @@ class Stack(object):
             dx, dy (float): shift distance (in pixel) along x (horizontal) and y (vertical). 
                 Note that elements in one row has the same y but different x. 
                 Example: dx = 2 is to shift the image "RIGHT", dy = 3 is to shift the image "UP".
-            method (str): interpolation method. Use 'lanczos' or 'spline'.
+            method (str): interpolation method. Use 'lanczos' or 'spline' or 'iraf'
             order (int): the order of spline interpolation (within 0-5) or Lanczos interpolation (>0).
             cval (scalar): value to fill the edges. Default is NaN.
 
@@ -367,9 +392,9 @@ class Stack(object):
             # Begin shift
             assert (order > 0) and isinstance(order, int), 'order of ' + method + ' must be positive interger.'
             galimg = InterpolatedImage(Image(self.mask, dtype=float), 
-                                    scale=0.168, x_interpolant=Lanczos(order))
-            galimg = galimg.shift(dx=dx * 0.168, dy=dy * 0.168)
-            result = galimg.drawImage(scale=0.168, nx=nx, ny=ny)#, wcs=AstropyWCS(self.wcs))
+                                    scale=self.pixel_scale, x_interpolant=Lanczos(order))
+            galimg = galimg.shift(dx=dx * self.pixel_scale, dy=dy * self.pixel_scale)
+            result = galimg.drawImage(scale=self.pixel_scale, nx=nx, ny=ny)#, wcs=AstropyWCS(self.wcs))
             self._mask = (result.array > 0.5).astype(float)
             # Change the WCS of image
             hdr = copy.deepcopy(self.header)
@@ -379,6 +404,21 @@ class Stack(object):
             self.wcs = wcs.WCS(hdr)
             self._wcs_header_merge()
             return result.array
+        elif method == 'iraf':
+            try:
+                from pyraf import iraf
+            except:
+                raise ImportError('# Import `iraf` failed! Please check if `pyraf` and `iraf` is installed!')
+            self.save_to_fits('./_temp.fits', 'mask')
+            iraf.imdel('./_shift_temp.fits')
+            iraf.imshift('./_temp.fits', './_shift_temp.fits', dx, dy, interpo='poly3', bound='constant', const=0.)
+            hdu = fits.open('./_shift_temp.fits')
+            self.mask = hdu[0].data
+            self.shape = hdu[0].data.shape
+            self.header = hdu[0].header
+            self.wcs = wcs.WCS(self.header)
+            hdu.close()
+            iraf.imdel('./*temp.fits')
         elif method == 'spline':
             from scipy.ndimage.interpolation import shift
             assert 0 < order <= 5 and isinstance(order, int), 'order of ' + method + ' must be within 0-5.'
@@ -415,10 +455,12 @@ class Stack(object):
     # Resize image/mask
     def _resize_wcs(self, img, w, f):
         w_temp = copy.deepcopy(w)
-        ra_cen, dec_cen = w_temp.wcs_pix2world(img.shape[1]//2, img.shape[0]//2, 0)
-        #print(ra_cen, dec_cen)
+        ra_cen, dec_cen = w_temp.wcs_pix2world(img.shape[1]/2, img.shape[0]/2, 0)
         w_temp.wcs.crval = [ra_cen, dec_cen]
-        w_temp.wcs.crpix = [img.shape[1]//2 * f, img.shape[0]//2 * f]
+        w_temp.wcs.crpix = [img.shape[1]/2 * f, img.shape[0]/2 * f]
+        #ra_cen, dec_cen = w_temp.wcs_pix2world(0, 0, 0)
+        #w_temp.wcs.crval = [ra_cen, dec_cen]
+        #w_temp.wcs.crpix = [0, 0]
         # move the reference pixel to (0, 0)
         w_temp.wcs.cd /= f
         return w_temp
@@ -427,6 +469,8 @@ class Stack(object):
         """
         Look! this function must be used just before `return`! If you use it earlier, you'll make big trouble!
         """
+        self.header['NAXIS1'] = self.image.shape[1]
+        self.header['NAXIS2'] = self.image.shape[0]
         if self.wcs is not None:
             wcs_header = self.wcs.to_header()
             import fnmatch
@@ -435,8 +479,7 @@ class Stack(object):
                     self.header[i] = wcs_header[i]
                 if fnmatch.fnmatch(i, 'CD?_?'):
                     self.header[i] = wcs_header['PC' + i.lstrip('CD')]
-        self.header['NAXIS1'] = self.image.shape[1]
-        self.header['NAXIS2'] = self.image.shape[0]
+        self.wcs = wcs.WCS(self.header)
 
 
     def resize_image(self, f, method='lanczos', order=5, cval=0.0):
@@ -447,7 +490,7 @@ class Stack(object):
 
         Parameters:
             f (float): the positive factor of zoom. If 0 < f < 1, the image will be resized to smaller one.
-            method (str): interpolation method. Use 'lanczos' or 'spline'.
+            method (str): interpolation method. Use 'lanczos' or 'spline' or 'iraf'.
             order (int): the order of spline interpolation (within 0-5) or Lanczos interpolation (>0).
             cval (scalar): value to fill the edges. Default is NaN.
 
@@ -465,15 +508,35 @@ class Stack(object):
 
             assert (order > 0) and isinstance(order, int), 'order of ' + method + ' must be positive interger.'
             galimg = InterpolatedImage(Image(self.image, dtype=float), 
-                                    scale=0.168, x_interpolant=Lanczos(order))
+                                    scale=self.pixel_scale, x_interpolant=Lanczos(order))
             #galimg = galimg.magnify(f)
             ny, nx = self.image.shape
-            result = galimg.drawImage(scale=0.168 / f, nx=round(nx * f), ny=round(ny * f))#, wcs=AstropyWCS(self.wcs))
+            result = galimg.drawImage(scale=self.pixel_scale / f, nx=round(nx * f), ny=round(ny * f))#, wcs=AstropyWCS(self.wcs))
             self.wcs = self._resize_wcs(self.image, self.wcs, f)
             self._image = result.array
             self.shape = self.image.shape
             self._wcs_header_merge()
+            self.pixel_scale /= f
             return result.array
+        elif method == 'iraf':
+            try:
+                from pyraf import iraf
+            except:
+                raise ImportError('# Import `iraf` failed! Please check if `pyraf` and `iraf` is installed!')
+            self.save_to_fits('./_temp.fits', 'image')
+            iraf.imdel('./_resize_temp.fits')
+            if f > 1:
+                iraf.magnify('./_temp.fits', './_resize_temp.fits', f, f, interpo='poly3', bound='constant', const=0.)
+            else:
+                iraf.blkavg('./_temp.fits', './_resize_temp.fits', 1/f, 1/f, option='sum')
+            hdu = fits.open('./_resize_temp.fits')
+            self.image = hdu[0].data
+            self.shape = hdu[0].data.shape
+            self.header = hdu[0].header
+            self.wcs = wcs.WCS(self.header)
+            self.pixel_scale /= f
+            hdu.close()
+            iraf.imdel('./*temp.fits')
         elif method == 'spline':
             from scipy.ndimage import zoom
             assert 0 < order <= 5 and isinstance(order, int), 'order of ' + method + ' must be within 0-5.'
@@ -482,6 +545,7 @@ class Stack(object):
             self._image = result
             self.shape = self.image.shape
             self._wcs_header_merge()
+            self.pixel_scale /= f
             return result
         elif method in ['bicubic', 'nearest', 'cubic', 'bilinear']:
             raise Warning("Cautious! Don't use ['bicubic', 'nearest', 'cubic', 'bilinear'] methods! They don't conserve the total flux!")
@@ -494,6 +558,7 @@ class Stack(object):
             self._image = result.astype(float)
             self.shape = self.image.shape
             self._wcs_header_merge()
+            self.pixel_scale /= f
             return result.astype(float)
         else:
             raise ValueError("# Not supported interpolation method. Use 'lanczos' or 'spline'.")
@@ -504,7 +569,7 @@ class Stack(object):
 
         Parameters:
             f (float): the positive factor of zoom. If 0 < f < 1, the image will be resized to smaller one.
-            method (str): interpolation method. Use 'lanczos' or 'spline'.
+            method (str): interpolation method. Use 'lanczos' or 'spline' or 'iraf'.
             order (int): the order of spline interpolation (within 0-5) or Lanczos interpolation (>0).
             cval (scalar): value to fill the edges. Default is NaN.
 
@@ -522,15 +587,32 @@ class Stack(object):
 
             assert (order > 0) and isinstance(order, int), 'order of ' + method + ' must be positive interger.'
             galimg = InterpolatedImage(Image(self.mask, dtype=float), 
-                                    scale=0.168, x_interpolant=Lanczos(order))
+                                    scale=self.pixel_scale, x_interpolant=Lanczos(order))
             #galimg = galimg.magnify(f)
             ny, nx = self.mask.shape
-            result = galimg.drawImage(scale=0.168 / f, nx=round(nx * f), ny=round(ny * f))#, wcs=AstropyWCS(self.wcs))
+            result = galimg.drawImage(scale=self.pixel_scale / f, nx=round(nx * f), ny=round(ny * f))#, wcs=AstropyWCS(self.wcs))
             self.wcs = self._resize_wcs(self.mask, self.wcs, f)
             self._mask = result.array
             self.shape = self.mask.shape
             self._wcs_header_merge()
+            self.pixel_scale /= f
             return result.array
+        elif method == 'iraf':
+            try:
+                from pyraf import iraf
+            except:
+                raise ImportError('# Import `iraf` failed! Please check if `pyraf` and `iraf` is installed!')
+            self.save_to_fits('./_temp.fits', 'mask')
+            iraf.imdel('./_resize_temp.fits')
+            iraf.magnify('./_temp.fits', './_resize_temp.fits', f, f, interpo='poly3', bound='constant', const=0.)
+            hdu = fits.open('./_resize_temp.fits')
+            self.mask = hdu[0].data
+            self.shape = hdu[0].data.shape
+            self.header = hdu[0].header
+            self.wcs = wcs.WCS(self.header)
+            self.pixel_scale /= f
+            hdu.close()
+            iraf.imdel('./*temp.fits')
         elif method == 'spline':
             from scipy.ndimage import zoom
             assert 0 < order <= 5 and isinstance(order, int), 'order of ' + method + ' must be within 0-5.'
@@ -539,6 +621,7 @@ class Stack(object):
             self.wcs = self._resize_wcs(self.mask, self.wcs, f)
             self.shape = self.mask.shape
             self._wcs_header_merge()
+            self.pixel_scale /= f
             return result
         elif method in ['bicubic', 'nearest', 'cubic', 'bilinear']:
             raise Warning("Cautious! Don't use ['bicubic', 'nearest', 'cubic', 'bilinear'] methods! They don't conserve the total flux!")
@@ -551,6 +634,7 @@ class Stack(object):
             self.wcs = self._resize_wcs(self.mask, self.wcs, f)
             self.shape = self.mask.shape
             self._wcs_header_merge()
+            self.pixel_scale /= f
             return result.astype(float)
         else:
             raise ValueError("# Not supported interpolation method. Use 'lanczos' or 'spline'.")
@@ -623,8 +707,9 @@ class StackSky(Stack):
         
     
 class StackStar(Stack):
-    def __init__(self, img, header, starobj, halosize=40, mask=None, hscmask=None):
+    def __init__(self, img, header, starobj, halosize=40, padsize=40, mask=None, hscmask=None):
         """Halosize is the radius!!!
+        RA, DEC are not supported yet!
         """
         Stack.__init__(self, img, mask, header=header)
         #if hscmask is not None:
@@ -640,7 +725,7 @@ class StackStar(Stack):
         dy = -1.0 * (starobj['y'] - y_int)
         halosize = int(halosize)
         # Make padded image to deal with stars near the edges
-        padsize = 40
+        padsize = int(padsize)
         ny, nx = self.image.shape
         im_padded = np.zeros((ny + 2 * padsize, nx + 2 * padsize))
         im_padded[padsize: ny + padsize, padsize: nx + padsize] = self.image
@@ -675,7 +760,7 @@ class StackStar(Stack):
     def centralize(self, method='lanczos', order=5, cval=0.0):
         self.shift_Stack(self.dx, self.dy, method=method, order=order, cval=cval)
 
-    def mask_contam(self, method='hscmask', blowup=True, show_fig=True, verbose=True):
+    def mask_out_contam(self, method='hscmask', blowup=True, show_fig=True, verbose=True):
         if method == 'hscmask':
             from unagi import mask
             from .image import mask_remove_cen_obj
@@ -686,12 +771,25 @@ class StackStar(Stack):
                 cv = convolve(detect_mask, Gaussian2DKernel(1.5))
                 detect_mask = (cv > 0.1).astype(float)
             self.mask = detect_mask
-            return 
+            return
         else: # method = 'sep'
             from astropy.convolution import convolve, Box2DKernel
             from .image import extract_obj, seg_remove_cen_obj
             img_blur = convolve(abs(self.image), Box2DKernel(2))
-            img_objects, img_segmap = extract_obj(abs(img_blur), b=5, f=4, sigma=4.5, minarea=2, pixel_scale=0.168,
+            img_objects, img_segmap = extract_obj(abs(img_blur), b=5, f=4, sigma=5.5, minarea=5, pixel_scale=self.pixel_scale,
+                                                  deblend_nthresh=32, deblend_cont=0.05, 
+                                                  sky_subtract=False, show_fig=show_fig, verbose=verbose)
+            # remove central object from segmap
+            img_segmap = seg_remove_cen_obj(img_segmap) 
+            detect_mask = (img_segmap != 0).astype(float)
+            if blowup is True:
+                from astropy.convolution import convolve, Gaussian2DKernel
+                cv = convolve(detect_mask, Gaussian2DKernel(1.5))
+                detect_mask_1 = (cv > 0.05)
+            img_blur = abs(img_blur) 
+            img_blur[detect_mask_1] = 0
+            # Second time
+            img_objects, img_segmap = extract_obj(img_blur, b=5, f=4, sigma=4.5, minarea=5, pixel_scale=self.pixel_scale,
                                                   deblend_nthresh=32, deblend_cont=0.0001, 
                                                   sky_subtract=False, show_fig=show_fig, verbose=verbose)
             # remove central object from segmap
@@ -700,9 +798,39 @@ class StackStar(Stack):
             if blowup is True:
                 from astropy.convolution import convolve, Gaussian2DKernel
                 cv = convolve(detect_mask, Gaussian2DKernel(1.5))
+                detect_mask_2 = (cv > 0.05)
+            self.mask = (detect_mask_1 + detect_mask_2).astype(float)
+            return 
+
+    def mask_out_contam_bright(self, method='hscmask', blowup=True, show_fig=True, verbose=True):
+        if method == 'hscmask':
+            from unagi import mask
+            from .image import mask_remove_cen_obj
+            detect_mask = mask.Mask(self.hscmask, data_release='s18a').extract('DETECTED').astype(float)
+            detect_mask = mask_remove_cen_obj(detect_mask)
+            if blowup is True:
+                from astropy.convolution import convolve, Gaussian2DKernel
+                cv = convolve(detect_mask, Gaussian2DKernel(1.5))
                 detect_mask = (cv > 0.1).astype(float)
             self.mask = detect_mask
+            return
+        else: # method = 'sep'
+            from astropy.convolution import convolve, Box2DKernel
+            from .image import extract_obj, seg_remove_cen_obj
+            img_blur = convolve(abs(self.image), Box2DKernel(2))
+            img_objects, img_segmap = extract_obj(abs(img_blur), b=5, f=4, sigma=4.5, minarea=5, pixel_scale=self.pixel_scale,
+                                                  deblend_nthresh=32, deblend_cont=0.005, 
+                                                  sky_subtract=False, show_fig=show_fig, verbose=verbose)
+            # remove central object from segmap
+            img_segmap = seg_remove_cen_obj(img_segmap) 
+            detect_mask = (img_segmap != 0).astype(float)
+            if blowup is True:
+                from astropy.convolution import convolve, Gaussian2DKernel
+                cv = convolve(detect_mask, Gaussian2DKernel(1.5))
+                detect_mask_1 = (cv > 0.05)
+            self.mask = (detect_mask_1).astype(float)
             return 
+
 
     def sub_bkg(self, verbose=True):
         # Here I subtract local sky background
@@ -713,7 +841,7 @@ class StackStar(Stack):
         from .image import extract_obj, seg_remove_cen_obj
         from sep import Background
         img_blur = convolve(abs(self.image), Box2DKernel(2))
-        img_objects, img_segmap = extract_obj(abs(img_blur), b=5, f=4, sigma=4.5, minarea=2, pixel_scale=0.168,
+        img_objects, img_segmap = extract_obj(abs(img_blur), b=5, f=4, sigma=4.5, minarea=2, pixel_scale=self.pixel_scale,
                                                 deblend_nthresh=32, deblend_cont=0.0001, 
                                                 sky_subtract=False, show_fig=False, verbose=False)
         bk = Background(self.image, img_segmap != 0)

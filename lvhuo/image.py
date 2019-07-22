@@ -407,7 +407,7 @@ def azimuthal_average(image, center=None, stddev=True, binsize=0.5, interpnan=Fa
     else:
         return [bin_centers, profile]
 
-def psf_SBP(psf_path, msk_path, pixel_scale, iraf_path, step=0.10, 
+def ellipse_psf_SBP(psf_path, msk_path, pixel_scale, iraf_path, step=0.10, 
             sma_ini=10.0, sma_max=100.0, n_clip=3, maxTry=5, low_clip=3.0, upp_clip=2.5, 
             outPre=None, verbose=True):
     #from kungpao.galsbp import galSBP
