@@ -831,7 +831,6 @@ class StackStar(Stack):
             self.mask = (detect_mask_1).astype(float)
             return 
 
-
     def sub_bkg(self, verbose=True):
         # Here I subtract local sky background
         # Evaluate local sky backgroud within `halo_i`
